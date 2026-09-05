@@ -200,11 +200,29 @@ install_prereqs() {
     esac
 }
 
-# Mandatory members of the "Development Tools" group, which is the only group
-# these scripts install. Verified identical on RHEL 8 and RHEL 9.
-_SC_GROUP_DEVELOPMENT_TOOLS="autoconf automake binutils bison flex gcc gcc-c++
-gdb glibc-devel libtool make pkgconf pkgconf-m4 pkgconf-pkg-config
-redhat-rpm-config rpm-build rpm-sign strace"
+# Echo the mandatory members of a package group, as the package manager reports
+# them. Empty when it cannot say -- an unknown group, an older dnf that words
+# the heading differently, or no group support at all.
+_sc_group_payload() {
+    set +x
+
+    if [ "$_sc_backend" != "rpm" ]; then
+        return 0
+    fi
+
+    # "Mandatory Packages:" only. Default and optional members can legitimately
+    # be absent from a fully installed group, so probing them would report the
+    # group as missing forever and install it on every run.
+    $_sc_yum group info "$1" 2>/dev/null | awk '
+        /^ *Mandatory Packages:/ { in_block = 1; next }
+        /^ *[A-Za-z][A-Za-z ]*:/ { in_block = 0 }
+        in_block {
+            gsub(/^[ \t]+/, ""); gsub(/[ \t]+$/, "")
+            # dnf marks installed members with a leading "+" or "-"
+            sub(/^[+-]/, "")
+            if ($0 != "") print
+        }'
+}
 
 # Install a package group unless its payload is already present.
 #
@@ -217,10 +235,12 @@ redhat-rpm-config rpm-build rpm-sign strace"
 install_prereq_group() {
     _sc_group=$1
 
-    case "$_sc_group" in
-        "Development Tools") _sc_payload="$_SC_GROUP_DEVELOPMENT_TOOLS" ;;
-        *) _sc_payload="" ;;
-    esac
+    # What the group contains is the package manager's answer to give, not a
+    # copy of it kept here: a list would go stale against the distribution and
+    # would have to be written out per release. A query that fails or returns
+    # nothing leaves the payload empty, which installs -- the same answer this
+    # gave for a group it did not recognise.
+    _sc_payload=$(_sc_group_payload "$_sc_group")
 
     # shellcheck disable=SC2086
     if [ -n "$_sc_payload" ] && ! prereqs_missing $_sc_payload; then
@@ -326,30 +346,55 @@ sc_remove_prereqs() {
     esac
 }
 
-# Packages that look build-only by name but are needed at RUN time. Each entry
-# is here because something invokes or links it after the build, which no
-# dependency graph records:
+# Per-image exceptions to the classification below, set by sc_remove_build_only
+# from its own arguments. They are per image and not a list here on purpose: a
+# package is build-only or not according to the tool that installed it, and a
+# global list of tool facts in this file makes every tool image depend on every
+# other tool's exceptions. _prereqs.sh feeds the check tag of all 30 tool
+# images, so one tool's exception would rebuild all of them.
 #
-#   zlib1g-dev   verilator compiles the generated model, and --trace-fst needs
-#                zlib's headers; "ghdl -e" links -lz into every design
-#   ccache       verilated.mk sets "OBJCACHE ?= ccache" and invokes it
-#                unconditionally, so removing it breaks every model build
-#   graphviz     yosys' "show" shells out to dot
-#   xdot         the viewer "show" opens
-#   libc6-dev    bambu compiles its 32-bit MDPI runtime at run time
-#   libllvm18    ghdl1-llvm links libLLVM.so.18.1. Nothing records it: ghdl is
-#                built from source, so the link never becomes a package
-#                dependency, and once clang-18 and doxygen are classed as
-#                removable below, libllvm18 looks free. It is not -- dropping it
-#                breaks every "ghdl -e".
-_SC_KEEP_BUILD_PKGS="zlib1g-dev ccache graphviz xdot libc6-dev libc-dev libllvm18"
+# The tool declares them in _tools.json instead -- "docker-keep-pkgs" for a
+# package it needs at run time, "docker-drop-pkgs" for one only its build needs
+# -- and setup/docker/tool.docker passes them here.
+_sc_keep_pkgs=""
+_sc_drop_pkgs=""
 
 # True when a package name is build-only material: headers and static libraries,
 # the build tools, and documentation generators.
+#
+# This is the definition of the class, and the only naming left in this file:
+# the conventions every deb image shares, which class the same way whatever
+# built the image. A package that is build-only in one image and load-bearing
+# in another is not a rule, it is a fact about a tool, and it belongs in that
+# tool's _tools.json entry -- "docker-keep-pkgs" to hold one back,
+# "docker-drop-pkgs" to add one. Putting such a name here instead makes every
+# one of the 30 tool images depend on it: _prereqs.sh feeds all of their check
+# tags, so one tool's exception rebuilds all of them.
+#
+# dpkg's own Section field is the obvious way to have no names here at all, and
+# it does not work: measured on ubuntu 24.04, section "devel" holds gcc, g++,
+# make, ccache and binutils along with cmake and autoconf, so classing by it
+# sweeps the toolchain verilator invokes to compile the model it generates and
+# the clang bambu shells out to. It also misses pandoc, groff and texinfo,
+# which sit in "text" and "perl". Keeping the patterns costs one rebuild of
+# everything on the rare occasion they change, which is honest: a change here
+# does change every image.
 _sc_is_build_only() {
-    case " $_SC_KEEP_BUILD_PKGS " in
-        *" $1 "*) return 1 ;;
-    esac
+    # Word splitting of the pattern lists is intended: each entry is a case
+    # pattern, so "libllvm17*" matches the family without naming every member.
+    # shellcheck disable=SC2086
+    for _sc_bo_pat in $_sc_keep_pkgs; do
+        case "$1" in
+            $_sc_bo_pat) return 1 ;;
+        esac
+    done
+
+    # shellcheck disable=SC2086
+    for _sc_bo_pat in $_sc_drop_pkgs; do
+        case "$1" in
+            $_sc_bo_pat) return 0 ;;
+        esac
+    done
 
     case "$1" in
         *-dev) return 0 ;;
@@ -359,48 +404,21 @@ _sc_is_build_only() {
         doxygen|pandoc|groff|texinfo|perl-doc|icu-devtools) return 0 ;;
     esac
 
-    # Distribution toolchain runtimes that arrive under a build dependency and
-    # that no tool in the image links. Checked one at a time against every ELF
-    # object in the prefix, because a shared library nothing links is dead
-    # weight however much it looks like a runtime package:
-    #
-    #   libllvm17t64   orphaned outright -- no package depends on it and no
-    #                  binary links libLLVM.so.17
-    #   the clang-18   held up only by doxygen and by ghdl's "clang", both of
-    #   stack          which are removed. ghdl links libllvm18 directly and
-    #                  shells out to no compiler, so the front end is unused.
-    #
-    # libllvm18 is deliberately NOT here -- see _SC_KEEP_BUILD_PKGS.
-    case "$1" in
-        libllvm17*|llvm-17|llvm-17-*) return 0 ;;
-        clang-18|clang|clang-format-18|libclang-cpp18|libclang1-18) return 0 ;;
-        llvm-18-linker-tools|llvm-18-runtime|llvm-runtime) return 0 ;;
-    esac
-
-    # The MPI and ROCm stack that install-xyce.sh drags in through
-    # libopenmpi-dev. SC builds Xyce serially -- "ldd Xyce" links no libmpi at
-    # all -- so none of this is reachable, and it is a lot: libamd-comgr2 alone
-    # is 59MB and it pulls libllvm17 behind it.
-    #
-    # Named rather than left to the dependency test because these are runtime
-    # packages that legitimately depend on each other, so the test only sees a
-    # self-consistent island and leaves all of it in place.
-    # The head of the chain is boost's MPI runtime, which arrives with
-    # libboost-all-dev and which nothing links either: Xyce and libxyce.so
-    # resolve zero libmpi/libucx libraries. Leave these out and the fixpoint
-    # below correctly refuses the whole chain, because they pin it.
-    case "$1" in
-        mpi-default-bin|libboost-mpi1.*|libboost-mpi-python1.*) return 0 ;;
-        libboost-graph-parallel1.*) return 0 ;;
-        libamd-comgr2|libamdhip64-*|libucx0|libopenmpi3*|openmpi-bin) return 0 ;;
-    esac
-
     return 1
 }
 
 # Remove every build-only package that nothing outside that class depends on.
 #
-#     sc_remove_build_only
+#     sc_remove_build_only [--keep "PATTERN..."] [--drop "PATTERN..."]
+#
+# --keep protects packages this image needs at run time that the rules above
+# would otherwise class as build-only: verilator's zlib1g-dev, which it needs to
+# compile the model it generates. --drop adds packages those rules do not
+# recognise but this image has no use for: the distribution clang stack that
+# arrives under ghdl's "llvm-dev", or the ROCm and MPI libraries that arrive
+# under xyce's libboost-all-dev and that nothing links. Both take shell case
+# patterns ("libllvm17*"), and both are per image: the tool declares them in its
+# _tools.json entry and tool.docker passes them.
 #
 # A criterion rather than a list, because a list of package names goes stale the
 # moment a tool changes its prerequisites, and because the names differ per
@@ -418,6 +436,19 @@ _sc_is_build_only() {
 # the name patterns above describe, so a build-only package like ghc, gnat-13 or
 # a distribution's llvm-18 still has to be named by the tool that installs it.
 sc_remove_build_only() {
+    _sc_keep_pkgs=""
+    _sc_drop_pkgs=""
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --keep) _sc_keep_pkgs="$_sc_keep_pkgs $2"; shift 2 ;;
+            --drop) _sc_drop_pkgs="$_sc_drop_pkgs $2"; shift 2 ;;
+            *)
+                echo "sc_remove_build_only: unknown argument $1" >&2
+                return 1
+                ;;
+        esac
+    done
+
     if [ "$_sc_backend" != "deb" ]; then
         echo "sc_remove_build_only: deb only, skipping"
         return 0
@@ -514,25 +545,44 @@ sc_remove_build_only() {
     sc_remove_prereqs $_sc_bo_drop
 }
 
-# Directories whose static archives are linked at RUN time, not build time, and
-# so are not build artifacts however much they look like them:
+# Delete what a tool says its prefix holds that is build-only.
 #
-#   lib/ghdl      libgrt.a, linked into every design by "ghdl -e"
-#   lib/panda     bambu's softfloat and libm, linked into generated designs
-#   lib/Bluesim   Bluespec's simulation kernel, linked by "bsc -sim"
-_SC_RUNTIME_ARCHIVE_DIRS="ghdl panda Bluesim"
-
-# Delete the build-only half of an install prefix: static archives, headers,
-# and the build-system and documentation trees.
+#     sc_prune_build_artifacts [DIR] [--dirs "PATH..."]
 #
-#     sc_prune_build_artifacts [DIR]
+# Each PATH is relative to the prefix and may be a glob: "include",
+# "lib/pkgconfig", "lib/*.a", "trilinos/lib/*.a". Nothing else goes. There is no
+# blanket rule and no exception list to go with it -- an earlier version deleted
+# every *.a in the prefix and then had to be told, by name, about the three
+# directories whose archives are linked at RUN time (ghdl's lib/ghdl/libgrt.a
+# for "ghdl -e", lib/panda for bambu's generated designs, lib/Bluesim for
+# "bsc -sim"). A tool that lists "lib/*.a" says the same thing without the
+# exception, because the glob does not reach into lib/ghdl.
 #
-# $PREFIX/include and $PREFIX/lib/cmake are dev material by convention and no
-# flow reads them. Note that the headers tools genuinely need at run time do not
-# live there -- verilator's are under share/verilator/include and bambu's under
-# share/panda -- so both survive.
+# Two things are reported rather than enforced, because a wrong list here costs
+# image size and a build failure costs a tool:
+#
+#   - an entry that matches nothing is called out, so a path that upstream
+#     stopped shipping shows up in the build log instead of rotting
+#   - archives left in the prefix are listed, so a tool that has never declared
+#     them is one grep of a build log away from a correct list
+#
+# Note that the headers a tool needs at run time do not live in the prefix's own
+# include/ -- verilator's are under share/verilator/include and bambu's under
+# share/panda -- which is why "include" is safe for a tool to list.
 sc_prune_build_artifacts() {
-    _sc_prune_dir="${1:-${PREFIX:-}}"
+    _sc_prune_dir=""
+    _sc_prune_dirs=""
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --dirs) _sc_prune_dirs="$_sc_prune_dirs $2"; shift 2 ;;
+            -*)
+                echo "sc_prune_build_artifacts: unknown argument $1" >&2
+                return 1
+                ;;
+            *) _sc_prune_dir="$1"; shift ;;
+        esac
+    done
+    _sc_prune_dir="${_sc_prune_dir:-${PREFIX:-}}"
 
     if [ -z "$_sc_prune_dir" ] || [ ! -d "$_sc_prune_dir" ]; then
         echo "sc_prune_build_artifacts: no prefix to prune" >&2
@@ -541,40 +591,43 @@ sc_prune_build_artifacts() {
 
     echo "Pruning build artifacts from $_sc_prune_dir"
 
-    _sc_prune_args=""
-    for _sc_prune_keep in $_SC_RUNTIME_ARCHIVE_DIRS; do
-        _sc_prune_args="$_sc_prune_args ! -path */$_sc_prune_keep/*"
+    for _sc_prune_entry in $_sc_prune_dirs; do
+        _sc_prune_hit=""
+        # Unquoted on purpose: the entry is a glob and this is where it expands.
+        # The prefix stays quoted, so a path with a space in it still works.
+        for _sc_prune_path in "$_sc_prune_dir"/$_sc_prune_entry; do
+            [ -e "$_sc_prune_path" ] || continue
+            rm -rf "$_sc_prune_path"
+            _sc_prune_hit="yes"
+        done
+
+        if [ -z "$_sc_prune_hit" ]; then
+            echo "  nothing matched, drop it from docker-prune-dirs: $_sc_prune_entry"
+        fi
     done
 
-    # Pathname expansion off for the unquoted expansion below: the patterns
-    # contain */ and the shell would expand them against the current directory.
-    # A "deps/ghdl/..." tree in the working directory -- which is exactly what
-    # ghdl's builder has -- turns */ghdl/* into a literal path, the exclusion
-    # stops matching, and libgrt.a is deleted. Word splitting is still wanted,
-    # to keep the find predicates separate.
-    set -f
-    # shellcheck disable=SC2086
-    find "$_sc_prune_dir" -name '*.a' $_sc_prune_args -delete 2>/dev/null
-    set +f
-
-    rm -rf "$_sc_prune_dir/include" \
-           "$_sc_prune_dir/lib/cmake" \
-           "$_sc_prune_dir/lib/pkgconfig" \
-           "$_sc_prune_dir/share/doc" \
-           "$_sc_prune_dir/share/man"
+    # Static archives are link-time material in every prefix that has them, so
+    # one left behind is either a tool that links it at run time or a list that
+    # has not caught up. Reported, never guessed at.
+    _sc_prune_left=$(find "$_sc_prune_dir" -name '*.a' 2>/dev/null)
+    if [ -n "$_sc_prune_left" ]; then
+        echo "  static archives left in the prefix, declare the build-only ones:"
+        echo "$_sc_prune_left" | sed "s|^$_sc_prune_dir/|    |"
+    fi
 }
 
-# The binutils family on deb, including what binutils drags in transitively.
-# sc_strip_prefix_managed installs binutils and then removes exactly the subset
-# that was not there before, so everything the install can add has to be
-# nameable -- without libctf0, libctf-nobfd0 and libsframe1 the removal leaves
-# them orphaned and they land in apt.txt.
-#
-# Names absent on a distribution (rpm ships only "binutils") fall out on their
-# own: they probe as missing, and sc_remove_prereqs re-probes and skips whatever
-# the install did not actually add.
-_SC_STRIP_PKGS="binutils binutils-common libbinutils binutils-x86-64-linux-gnu
-    libctf0 libctf-nobfd0 libsframe1"
+# Echo every installed package name, one per line, sorted. Empty when there is
+# no probe to ask, which makes the caller's before/after diff empty too -- the
+# safe direction, since the cost is a package left installed.
+_sc_installed_names() {
+    set +x
+
+    if command -v dpkg-query > /dev/null 2>&1; then
+        dpkg-query -W -f='${Package}\n' 2>/dev/null | sort
+    elif command -v rpm > /dev/null 2>&1; then
+        rpm -qa --qf '%{NAME}\n' 2>/dev/null | sort
+    fi
+}
 
 # Strip a prefix even on an image that has no "strip", borrowing binutils for
 # the duration.
@@ -597,17 +650,25 @@ sc_strip_prefix_managed() {
         return 0
     fi
 
-    # Take back out exactly what this adds. On an image where part of the family
-    # was already present, removing all of it would be a change this function
-    # has no business making.
-    # Word splitting of the package list is intended.
-    # shellcheck disable=SC2086
-    _sc_strip_added=$(_sc_missing_pkgs $_SC_STRIP_PKGS)
+    # Take back out exactly what this adds, by comparing the installed set
+    # before and after rather than by naming the binutils family: what
+    # "apt-get install binutils" pulls in differs by distribution and moves
+    # between releases -- libsframe1 and libctf-nobfd0 both appeared in one --
+    # and a list that misses one leaves it installed and shipping. On an image
+    # where part of the family was already present, the diff leaves it alone.
+    _sc_strip_before=$(mktemp)
+    _sc_strip_after=$(mktemp)
 
+    _sc_installed_names > "$_sc_strip_before"
     install_prereqs binutils
+    _sc_installed_names > "$_sc_strip_after"
+
+    _sc_strip_added=$(comm -13 "$_sc_strip_before" "$_sc_strip_after" | tr '\n' ' ')
+    rm -f "$_sc_strip_before" "$_sc_strip_after"
 
     sc_strip_prefix "$@"
 
+    # Word splitting of the package list is intended.
     # shellcheck disable=SC2086
     sc_remove_prereqs $_sc_strip_added
 }

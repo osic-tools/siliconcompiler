@@ -47,10 +47,17 @@ RUN apt-get update && \
 # _prereqs.sh is copied to $SC_BUILD/.. above, which is / only because SC_BUILD
 # defaults to /sc_build. Resolve it the same way the install scripts do, so an
 # overridden SC_BUILD still finds it.
+#
+# What this image prunes, keeps and drops is entirely the tools' own
+# declarations -- docker-prune-dirs, docker-keep-pkgs and docker-drop-pkgs in
+# _tools.json -- unioned with those of the tools this one is
+# built on top of, whose files are in this prefix too. _prereqs.sh names no
+# package and no directory of its own: it feeds every tool image's check tag, so
+# anything listed there rebuilds all 30 images to record one tool's exception.
 RUN . $SC_BUILD/../_prereqs.sh && \
     sc_strip_prefix_managed $SC_PREFIX && \
-    sc_prune_build_artifacts $SC_PREFIX && \
-    sc_remove_build_only && \
+    sc_prune_build_artifacts $SC_PREFIX{% if prune_dirs %} --dirs "{{ prune_dirs }}"{% endif %} && \
+    sc_remove_build_only{% if keep_pkgs %} --keep "{{ keep_pkgs }}"{% endif %}{% if drop_pkgs %} --drop "{{ drop_pkgs }}"{% endif %} && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 {% else %}

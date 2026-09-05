@@ -4,82 +4,170 @@
     "git-commit": "372189ed6554794bc47473259b5e6edfdecd6f1a",
     "docker-cmds": [
       "# Remove OR-Tools files",
-      "RUN rm -f $SC_PREFIX/Makefile $SC_PREFIX/README.md",
+      "RUN rm $SC_PREFIX/Makefile $SC_PREFIX/README.md",
       "# Remove OpenROAD Env file",
-      "RUN rm -f $SC_PREFIX/env.sh",
-      "# Drop the documentation toolchain and the -dev half of the GUI libraries.",
-      "# The matching runtime xcb libraries stay: they are separate packages, and",
-      "# sc_remove_prereqs does no autoremove, so they are not swept up.",
-      "RUN . $SC_BUILD/../_prereqs.sh && sc_remove_prereqs pandoc groff bsdmainutils \\",
-      "    libxcb1-dev libxcb-util-dev libxcb-icccm4-dev libxcb-image0-dev \\",
-      "    libxcb-keysyms1-dev libxcb-randr0-dev libxcb-render-util0-dev \\",
-      "    libxcb-xinerama0-dev libxcb-xkb-dev"
+      "RUN rm $SC_PREFIX/env.sh"
     ],
-    "auto-update": true
+    "auto-update": true,
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ],
+    "_comment-drop-pkgs": [
+      "The documentation toolchain and the -dev half of the GUI libraries. pandoc,",
+      "groff and every libxcb*-dev are build-only by the generic rules already, so",
+      "only bsdmainutils has to be named. The matching runtime xcb libraries stay:",
+      "they are separate packages and the sweep does no autoremove."
+    ],
+    "docker-drop-pkgs": [
+      "bsdmainutils"
+    ]
   },
   "surelog": {
     "git-url": "https://github.com/chipsalliance/Surelog.git",
     "git-commit": "v1.87",
     "auto-update": true,
-    "docker-cmds": [
-      "# Link-time only: surelog and the uhdm tools are what run.",
-      "RUN rm -f $SC_PREFIX/lib/libsurelog.a $SC_PREFIX/lib/libuhdm*.a \\",
-      "    $SC_PREFIX/lib/libantlr*.a",
-      "# Drop the build toolchain. The JRE here runs ANTLR's parser generator at",
-      "# build time only -- install-chisel.sh declares its own JRE, so removing",
-      "# this one no longer leaves sbt without a java to run.",
-      "RUN . $SC_BUILD/../_prereqs.sh && sc_remove_prereqs default-jre default-jre-headless \\",
-      "    cmake swig uuid-dev libgoogle-perftools-dev python3-dev lcov \\",
-      "    pkg-config"
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man",
+      "lib/*.a"
+    ],
+    "_comment-drop-pkgs": [
+      "The JRE here runs ANTLR's parser generator at build time only --",
+      "install-chisel.sh declares its own JRE, so removing this one does not leave",
+      "sbt without a java to run. The rest of what this image builds with (cmake,",
+      "swig, uuid-dev, python3-dev, lcov, pkg-config) is build-only by the generic",
+      "rules already."
+    ],
+    "docker-drop-pkgs": [
+      "default-jre",
+      "default-jre-headless"
     ]
   },
   "opensta": {
     "git-url": "https://github.com/parallaxsw/OpenSTA.git",
     "git-commit": "2996e37a3aa7fdfd197b84842df719e70757657f",
     "auto-update": true,
-    "docker-cmds": [
-      "# libOpenSTA.a is link-time only: the sta binary is what runs. 86MB.",
-      "RUN rm -f $SC_PREFIX/lib/libOpenSTA.a"
+    "_comment-prune-dirs": [
+      "Measured against a build of this image: every entry matched something and",
+      "nothing build-only was left behind. sc_prune_build_artifacts reports both",
+      "halves of that -- an entry that matches nothing, and any archive still in",
+      "the prefix -- so a list that goes stale says so in the build log."
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/*.a"
     ]
   },
   "netgen": {
     "git-url": "https://github.com/RTimothyEdwards/netgen.git",
     "git-commit": "fb7876c7a6f9d58a3d88a49e302e682c1d12e00d",
-    "auto-update": false
+    "auto-update": false,
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
   },
   "ghdl": {
     "git-url": "https://github.com/ghdl/ghdl.git",
+    "_comment-keep-pkgs": [
+      "zlib1g-dev: \"ghdl -e\" links -lz into every elaborated design, and",
+      "lib/ghdl/libgrt.a with it -- which is why docker-prune-dirs below lists no",
+      "archives. libllvm18: ghdl1-llvm links libLLVM.so.18.1 and nothing records",
+      "it, because ghdl is built from source and the link never becomes a package",
+      "dependency."
+    ],
+    "docker-keep-pkgs": [
+      "zlib1g-dev",
+      "libllvm18"
+    ],
     "git-commit": "v6.0.0",
     "auto-update": true,
-    "docker-cmds": [
-      "# Drop the LLVM headers and the Ada compiler. libllvm18 and libgnat-13",
-      "# stay: ghdl1-llvm links both at runtime (ldd confirms) and ghdl shells out",
-      "# to no compiler of its own.",
-      "#",
-      "# libz-dev and lib/ghdl/libgrt.a both stay: every \"ghdl -e\" links -lz and",
-      "# libgrt.a into the elaborated design.",
-      "RUN . $SC_BUILD/../_prereqs.sh && sc_remove_prereqs llvm-18-dev llvm-18 llvm-18-tools \\",
-      "    libclang-18-dev clang clang-18 libclang-cpp18 libclang1-18 gnat \\",
-      "    gnat-13 gnat-13-x86-64-linux-gnu"
+    "_comment-drop-pkgs": [
+      "The distribution clang stack that arrives under ghdl's \"llvm-dev\", the",
+      "LLVM tools and the Ada compiler. libllvm18 and libgnat-13 stay -- ghdl1-llvm",
+      "links both at run time (ldd confirms) and ghdl shells out to no compiler of",
+      "its own -- which is why libllvm18 is in docker-keep-pkgs.",
+      "",
+      "\"llvm\" is the unversioned metapackage. Without it the sweep keeps llvm-18:",
+      "nothing classes llvm as build-only, so it counts as a runtime dependent and",
+      "pins the version it points at."
+    ],
+    "docker-drop-pkgs": [
+      "clang",
+      "clang-18",
+      "clang-format-18",
+      "libclang-cpp18",
+      "libclang1-18",
+      "llvm-18-linker-tools",
+      "llvm-18-runtime",
+      "llvm-runtime",
+      "llvm",
+      "llvm-18",
+      "llvm-18-tools",
+      "gnat",
+      "gnat-13",
+      "gnat-13-x86-64-linux-gnu"
+    ],
+    "_comment-prune-dirs": [
+      "Measured against a build of this image: every entry matched something and",
+      "nothing build-only was left behind. sc_prune_build_artifacts reports both",
+      "halves of that -- an entry that matches nothing, and any archive still in",
+      "the prefix -- so a list that goes stale says so in the build log."
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/*.a"
     ]
   },
   "magic": {
     "git-url": "https://github.com/RTimothyEdwards/magic.git",
     "git-commit": "c7f11d2169f6af8751ae22b5d70250b331e1a667",
-    "auto-update": false
+    "auto-update": false,
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
   },
   "bluespec": {
     "git-url": "https://github.com/B-Lang-org/bsc.git",
     "git-commit": "2026.07",
     "version-prefix": "",
     "auto-update": true,
-    "docker-cmds": [
-      "# Drop the Haskell toolchain. bsc and bluetcl are compiled binaries whose",
-      "# runtime needs are libgmp10, libffi8 and libtcl8.6 -- separate packages,",
-      "# and no autoremove means they stay. lib/Bluesim/*.a stays too: \"bsc -sim\"",
-      "# links it.",
-      "RUN . $SC_BUILD/../_prereqs.sh && sc_remove_prereqs ghc libghc-regex-compat-dev \\",
-      "    libghc-syb-dev libghc-old-time-dev libghc-split-dev tcl-dev pkg-config"
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ],
+    "_comment-prune-dirs": [
+      "No archive glob: lib/Bluesim holds the simulation kernel that \"bsc -sim\"",
+      "links into the simulations it builds."
+    ],
+    "_comment-drop-pkgs": [
+      "The Haskell toolchain bsc is built with. Its libghc-*-dev packages and",
+      "tcl-dev are build-only by the generic rules, so only ghc has to be named --",
+      "and naming it during the sweep rather than after it is what lets the",
+      "libbsd-dev, libffi-dev, libgmp-dev, libmd-dev and libncurses-dev it holds go",
+      "with it. bsc and bluetcl are compiled binaries whose runtime needs are",
+      "libgmp10, libffi8 and libtcl8.6 -- separate packages, and no autoremove",
+      "means they stay."
+    ],
+    "docker-drop-pkgs": [
+      "ghc"
     ]
   },
   "klayout": {
@@ -93,6 +181,13 @@
       "RUN echo \"sudo apt-get install -y $SC_PREFIX/klayout.deb\" >> $SC_PREFIX/install-klayout.sh",
       "RUN echo \"sudo rm $SC_PREFIX/klayout.deb\" >> $SC_PREFIX/install-klayout.sh",
       "RUN chmod +x $SC_PREFIX/install-klayout.sh"
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
     ]
   },
   "sv2v": {
@@ -103,11 +198,27 @@
       "# The Haskell Stack build tool, a statically linked 90MB binary that",
       "# install-sv2v.sh drops in the prefix to compile sv2v with. sv2v is a",
       "# standalone binary once built and never invokes it again.",
-      "RUN rm -f $SC_PREFIX/stack"
+      "RUN rm $SC_PREFIX/stack"
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
     ]
   },
   "verilator": {
     "git-url": "https://github.com/verilator/verilator.git",
+    "_comment-keep-pkgs": [
+      "zlib1g-dev: verilator compiles the generated model after the build, and",
+      "--trace-fst links -lz into it. ccache: verilated.mk sets",
+      "OBJCACHE ?= ccache and invokes it unconditionally."
+    ],
+    "docker-keep-pkgs": [
+      "zlib1g-dev",
+      "ccache"
+    ],
     "git-commit": "v5.038",
     "auto-update": true,
     "docker-cmds": [
@@ -115,85 +226,257 @@
       "# verilator_bin's 17MB and nothing in the flows selects it.",
       "#",
       "# g++, make, perl and zlib1g-dev all stay: they are what compiles the",
-      "# generated model at run time, and --trace-fst links -lz into it.",
-      "RUN rm -f $SC_PREFIX/bin/*_dbg $SC_PREFIX/share/verilator/bin/*_dbg",
-      "RUN . $SC_BUILD/../_prereqs.sh && sc_remove_prereqs libfl-dev libgoogle-perftools-dev \\",
-      "    perl-doc help2man autoconf"
+      "# generated model at run time, and --trace-fst links -lz into it. What this",
+      "# used to remove by name -- libfl-dev, libgoogle-perftools-dev, perl-doc,",
+      "# help2man, autoconf -- the sweep classes build-only on its own.",
+      "RUN rm $SC_PREFIX/bin/*_dbg $SC_PREFIX/share/verilator/bin/*_dbg"
+    ],
+    "_comment-prune-dirs": [
+      "Measured against a build of this image: every entry matched something and",
+      "nothing build-only was left behind. sc_prune_build_artifacts reports both",
+      "halves of that -- an entry that matches nothing, and any archive still in",
+      "the prefix -- so a list that goes stale says so in the build log."
+    ],
+    "docker-prune-dirs": [
+      "share/man"
     ]
   },
   "bambu": {
     "git-url": "https://github.com/ferrandi/PandA-bambu.git",
+    "_comment-keep-pkgs": [
+      "bambu compiles its 32-bit MDPI simulation runtime at run time, which needs",
+      "libc6-dev (libc-dev is the virtual name), and links lib/panda/*.a into the",
+      "designs it generates -- so docker-prune-dirs below lists no archives."
+    ],
+    "docker-keep-pkgs": [
+      "libc6-dev",
+      "libc-dev"
+    ],
     "git-commit": "2024.10",
     "auto-update": false,
     "docker-cmds": [
       "# Remove ORFS Stuff",
-      "RUN rm -rf $SC_PREFIX/share/panda/asap7",
-      "RUN rm -rf $SC_PREFIX/share/panda/nangate45",
-      "RUN rm -rf $SC_PREFIX/share/panda/scripts",
-      "# Drop the clang and boost build APIs. bambu shells out to clang-16,",
-      "# clang++-16 and llvm-link-16 at runtime, so the clang *runtime* packages",
-      "# stay; only the headers and static libraries go. libboost-all-dev is a",
-      "# metapackage, so removing it takes its whole -dev set with it.",
-      "#",
-      "# gcc-multilib, g++-multilib and libc6-dev are NOT removable: bambu",
-      "# compiles its 32-bit MDPI simulation runtime at run time. Neither is",
-      "# lib/panda/*.a, which it links into generated designs.",
-      "RUN . $SC_BUILD/../_prereqs.sh && sc_remove_prereqs llvm-16-dev libclang-16-dev \\",
-      "    libboost-all-dev doxygen graphviz libsuitesparse-dev libglpk-dev \\",
-      "    libbdd-dev libmpfi-dev libmpc-dev libmpfr-dev libxml2-dev liblzma-dev \\",
-      "    libicu-dev autoconf-archive libfl-dev"
+      "RUN rm -r $SC_PREFIX/share/panda/asap7",
+      "RUN rm -r $SC_PREFIX/share/panda/nangate45",
+      "RUN rm -r $SC_PREFIX/share/panda/scripts"
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ],
+    "_comment-drop-pkgs": [
+      "The clang and boost build APIs are -dev packages the generic rules catch;",
+      "only graphviz (doxygen's renderer) and autoconf-archive have to be named.",
+      "bambu shells out to clang-16, clang++-16 and llvm-link-16 at run time, so",
+      "the clang *runtime* packages are not listed here.",
+      "",
+      "gcc-multilib, g++-multilib and libc6-dev are NOT droppable: bambu compiles",
+      "its 32-bit MDPI simulation runtime at run time. Neither is lib/panda/*.a,",
+      "which it links into the designs it generates."
+    ],
+    "docker-drop-pkgs": [
+      "clang",
+      "clang-18",
+      "clang-format-18",
+      "libclang-cpp18",
+      "libclang1-18",
+      "llvm-18-linker-tools",
+      "llvm-18-runtime",
+      "llvm-runtime",
+      "libllvm17*",
+      "llvm-17",
+      "llvm-17-*",
+      "mpi-default-bin",
+      "libboost-mpi1.*",
+      "libboost-mpi-python1.*",
+      "libboost-graph-parallel1.*",
+      "libamd-comgr2",
+      "libamdhip64-*",
+      "libucx0",
+      "libopenmpi3*",
+      "openmpi-bin",
+      "graphviz",
+      "autoconf-archive"
     ]
   },
   "vpr": {
     "git-url": "https://github.com/verilog-to-routing/vtr-verilog-to-routing.git",
     "git-commit": "fe77ace273b3f0558763e0e91d409b2d13344eff",
     "auto-update": false,
-    "docker-cmds": [
-      "# vpr's build installs its intermediate archives into bin/ alongside the",
-      "# executables. Link-time only. 168MB.",
-      "RUN rm -f $SC_PREFIX/bin/*.a"
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man",
+      "bin/*.a"
     ]
   },
   "icepack": {
     "git-url": "https://github.com/YosysHQ/icestorm.git",
     "git-commit": "v1.1",
-    "auto-update": false
+    "auto-update": false,
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ],
+    "docker-drop-pkgs": [
+      "clang",
+      "clang-18",
+      "clang-format-18",
+      "libclang-cpp18",
+      "libclang1-18",
+      "llvm-18-linker-tools",
+      "llvm-18-runtime",
+      "llvm-runtime",
+      "libllvm17*",
+      "llvm-17",
+      "llvm-17-*",
+      "mpi-default-bin",
+      "libboost-mpi1.*",
+      "libboost-mpi-python1.*",
+      "libboost-graph-parallel1.*",
+      "libamd-comgr2",
+      "libamdhip64-*",
+      "libucx0",
+      "libopenmpi3*",
+      "openmpi-bin"
+    ]
   },
   "nextpnr": {
     "git-url": "https://github.com/YosysHQ/nextpnr.git",
     "git-commit": "nextpnr-0.9",
-    "docker-depends": "icepack"
+    "docker-depends": "icepack",
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ],
+    "docker-drop-pkgs": [
+      "clang",
+      "clang-18",
+      "clang-format-18",
+      "libclang-cpp18",
+      "libclang1-18",
+      "llvm-18-linker-tools",
+      "llvm-18-runtime",
+      "llvm-runtime",
+      "libllvm17*",
+      "llvm-17",
+      "llvm-17-*",
+      "mpi-default-bin",
+      "libboost-mpi1.*",
+      "libboost-mpi-python1.*",
+      "libboost-graph-parallel1.*",
+      "libamd-comgr2",
+      "libamdhip64-*",
+      "libucx0",
+      "libopenmpi3*",
+      "openmpi-bin"
+    ]
   },
   "chisel": {
     "version": "2.0.8",
     "git-url": "https://github.com/sbt/sbt.git",
-    "auto-update": true
+    "auto-update": true,
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
   },
   "icarus": {
     "git-url": "https://github.com/steveicarus/iverilog.git",
     "git-commit": "v13_0",
-    "auto-update": true
+    "auto-update": true,
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
   },
   "yosys": {
     "git-url": "https://github.com/YosysHQ/yosys.git",
+    "_comment-keep-pkgs": [
+      "yosys' \"show\" shells out to dot and opens the result in xdot. The images",
+      "built on top of this one (sby, wildebeest, yosys-moosic) inherit this:",
+      "builder.py unions a tool's lists with those of the tools it is built on."
+    ],
+    "docker-keep-pkgs": [
+      "graphviz",
+      "xdot"
+    ],
     "git-commit": "v0.68",
     "version-prefix": "",
-    "auto-update": true
+    "auto-update": true,
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ],
+    "docker-drop-pkgs": [
+      "clang",
+      "clang-18",
+      "clang-format-18",
+      "libclang-cpp18",
+      "libclang1-18",
+      "llvm-18-linker-tools",
+      "llvm-18-runtime",
+      "llvm-runtime"
+    ]
   },
   "xyce": {
     "git-url": "https://github.com/Xyce/Xyce.git",
     "git-commit": "Release-7.10.0",
     "version-prefix": "Release-",
     "auto-update": true,
-    "docker-cmds": [
-      "# Trilinos is linked into the Xyce binary and libxyce.so; the archives it",
-      "# was linked from are not needed to run either. 299MB.",
-      "RUN rm -f $SC_PREFIX/trilinos/lib/*.a"
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man",
+      "trilinos/lib/*.a"
+    ],
+    "docker-drop-pkgs": [
+      "libllvm17*",
+      "llvm-17",
+      "llvm-17-*",
+      "mpi-default-bin",
+      "libboost-mpi1.*",
+      "libboost-mpi-python1.*",
+      "libboost-graph-parallel1.*",
+      "libamd-comgr2",
+      "libamdhip64-*",
+      "libucx0",
+      "libopenmpi3*",
+      "openmpi-bin"
     ]
   },
   "xdm": {
     "version": "2.7.0",
-    "auto-update": false
+    "auto-update": false,
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
   },
   "slurm": {
     "version": "22.05.7",
@@ -205,25 +488,53 @@
     "docker-cmds": [
       "COPY slurm $SC_PREFIX/slurm_cfg",
       "RUN mv $SC_PREFIX/slurm_cfg/install-slurm.sh $SC_PREFIX/",
-      "RUN chmod +x $SC_PREFIX/install-slurm.sh",
-      "# Slurm loads its plugins as .so; these are the static variants. 298MB.",
-      "RUN rm -f $SC_PREFIX/lib/libslurm.a $SC_PREFIX/lib/slurm/*.a"
+      "RUN chmod +x $SC_PREFIX/install-slurm.sh"
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man",
+      "lib/*.a",
+      "lib/slurm/*.a"
     ]
   },
   "montage": {
     "version": "6.9.11",
     "auto-update": false,
-    "docker-skip": true
+    "docker-skip": true,
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
   },
   "verible": {
     "version": "v0.0-4051-g9fdb4057",
     "git-url": "https://github.com/chipsalliance/verible.git",
-    "auto-update": false
+    "auto-update": false,
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
   },
   "gtkwave": {
     "git-commit": "v3.3.116",
     "git-url": "https://github.com/gtkwave/gtkwave.git",
-    "auto-update": true
+    "auto-update": true,
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
   },
   "sby": {
     "git-url": "https://github.com/YosysHQ/sby.git",
@@ -233,7 +544,14 @@
       "bitwuzla",
       "boolector"
     ],
-    "auto-update": true
+    "auto-update": true,
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
   },
   "bitwuzla": {
     "git-url": "https://github.com/bitwuzla/bitwuzla.git",
@@ -251,33 +569,85 @@
     "git-url": "https://github.com/gadfort/moosic-yosys-plugin.git",
     "git-commit": "fbe57eaae507f50e2504777b2438fa9eb451dab9",
     "docker-depends": "yosys",
-    "auto-update": true
+    "auto-update": true,
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
   },
   "wildebeest": {
     "git-url": "https://github.com/zeroasiccorp/wildebeest.git",
     "git-commit": "7d376b59814404f68f800e49c9400501840ef9f0",
     "docker-depends": "yosys",
-    "auto-update": true
+    "auto-update": true,
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
   },
   "surfer": {
     "git-url": "https://gitlab.com/surfer-project/surfer.git",
     "git-commit": "v0.7.0",
-    "auto-update": true
+    "auto-update": true,
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
   },
   "keplerformal": {
     "git-url": "https://github.com/keplertech/kepler-formal.git",
     "git-commit": "fcb3d23b362768ba9d04d351b628fe0290421838",
-    "auto-update": true
+    "auto-update": true,
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ],
+    "docker-drop-pkgs": [
+      "clang",
+      "clang-18",
+      "clang-format-18",
+      "libclang-cpp18",
+      "libclang1-18",
+      "llvm-18-linker-tools",
+      "llvm-18-runtime",
+      "llvm-runtime"
+    ]
   },
   "vcd2fst": {
     "git-url": "https://github.com/Silimate/vcd2fst.git",
     "git-commit": "5b00c4f9ae7d07987082992774a5e6a1b8adc8d7",
-    "auto-update": true
+    "auto-update": true,
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
   },
   "mlir": {
     "git-url": "https://github.com/llvm/llvm-project.git",
     "git-commit": "llvmorg-19.1.5",
-    "auto-update": false
+    "auto-update": false,
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
   },
   "soda": {
     "git-url": "https://github.com/pnnl/soda-opt.git",
@@ -285,25 +655,21 @@
     "auto-update": false,
     "docker-depends": "mlir",
     "docker-cmds": [
-      "# Drop the LLVM/MLIR dev tree now that soda-opt is linked. \"ldd soda-opt\"",
-      "# reports libstdc++, libm, libgcc_s and libc and nothing else -- it is",
-      "# statically linked, so none of this has a runtime consumer.",
-      "#",
-      "# Named by prefix rather than a blanket \"find -name '*.a' -delete\". This",
-      "# image's prefix holds only mlir and soda, but three tools elsewhere ship",
-      "# static archives their runtime links against -- lib/ghdl/libgrt.a for",
-      "# \"ghdl -e\", lib/panda/*.a for bambu's generated designs, lib/Bluesim/*.a",
-      "# for \"bsc -sim\" -- so a blanket delete is the wrong habit to establish in",
-      "# a prefix that is shared whenever PREFIX is set.",
-      "RUN rm -f $SC_PREFIX/lib/libLLVM*.a $SC_PREFIX/lib/libMLIR*.a \\",
-      "    $SC_PREFIX/lib/libclang*.a $SC_PREFIX/lib/libLTO*.a \\",
-      "    $SC_PREFIX/lib/libRemarks*.a $SC_PREFIX/lib/libPolly*.a \\",
-      "    $SC_PREFIX/lib/libbenchmark*.a $SC_PREFIX/lib/libgtest*.a",
-      "RUN rm -rf $SC_PREFIX/include $SC_PREFIX/lib/cmake $SC_PREFIX/lib/pkgconfig",
       "# libclang-cpp.so and libclang.so are only loaded by c-index-test, which",
-      "# install-mlir.sh no longer installs.",
-      "RUN rm -f $SC_PREFIX/lib/libclang-cpp.so* $SC_PREFIX/lib/libclang.so* \\",
+      "# install-mlir.sh no longer installs. The static half of the LLVM/MLIR dev",
+      "# tree needs no line here: soda-opt is statically linked, this image",
+      "# declares no docker-keep-archives, and the prune takes every archive that",
+      "# is not declared.",
+      "RUN rm $SC_PREFIX/lib/libclang-cpp.so* $SC_PREFIX/lib/libclang.so* \\",
       "    $SC_PREFIX/lib/libLTO.so* $SC_PREFIX/lib/libRemarks.so*"
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man",
+      "lib/*.a"
     ]
   }
 }
