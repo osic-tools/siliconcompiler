@@ -2,12 +2,6 @@
   "openroad": {
     "git-url": "https://github.com/The-OpenROAD-Project/OpenROAD.git",
     "git-commit": "372189ed6554794bc47473259b5e6edfdecd6f1a",
-    "docker-cmds": [
-      "# Remove OR-Tools files",
-      "RUN rm $SC_PREFIX/Makefile $SC_PREFIX/README.md",
-      "# Remove OpenROAD Env file",
-      "RUN rm $SC_PREFIX/env.sh"
-    ],
     "auto-update": true,
     "docker-prune-dirs": [
       "include",
