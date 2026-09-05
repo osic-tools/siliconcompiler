@@ -3,13 +3,6 @@
     "git-url": "https://github.com/The-OpenROAD-Project/OpenROAD.git",
     "git-commit": "372189ed6554794bc47473259b5e6edfdecd6f1a",
     "auto-update": true,
-    "docker-prune-dirs": [
-      "include",
-      "lib/cmake",
-      "lib/pkgconfig",
-      "share/doc",
-      "share/man"
-    ],
     "_comment-drop-pkgs": [
       "The documentation toolchain and the -dev half of the GUI libraries. pandoc,",
       "groff and every libxcb*-dev are build-only by the generic rules already, so",
@@ -18,20 +11,19 @@
     ],
     "docker-drop-pkgs": [
       "bsdmainutils"
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
     ]
   },
   "surelog": {
     "git-url": "https://github.com/chipsalliance/Surelog.git",
     "git-commit": "v1.87",
     "auto-update": true,
-    "docker-prune-dirs": [
-      "include",
-      "lib/cmake",
-      "lib/pkgconfig",
-      "share/doc",
-      "share/man",
-      "lib/*.a"
-    ],
     "_comment-drop-pkgs": [
       "The JRE here runs ANTLR's parser generator at build time only --",
       "install-chisel.sh declares its own JRE, so removing this one does not leave",
@@ -42,6 +34,20 @@
     "docker-drop-pkgs": [
       "default-jre",
       "default-jre-headless"
+    ],
+    "_comment-prune-dirs": [
+      "The archive globs are measured against a build of this image. They",
+      "are one level above the directories that hold the archives linked at",
+      "The archive globs are measured against a build of this image: what",
+      "the blanket \"delete every *.a\" used to catch here."
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man",
+      "lib/*.a"
     ]
   },
   "opensta": {
@@ -49,13 +55,17 @@
     "git-commit": "2996e37a3aa7fdfd197b84842df719e70757657f",
     "auto-update": true,
     "_comment-prune-dirs": [
-      "Measured against a build of this image: every entry matched something and",
-      "nothing build-only was left behind. sc_prune_build_artifacts reports both",
-      "halves of that -- an entry that matches nothing, and any archive still in",
-      "the prefix -- so a list that goes stale says so in the build log."
+      "The archive globs are measured against a build of this image. They",
+      "are one level above the directories that hold the archives linked at",
+      "The archive globs are measured against a build of this image: what",
+      "the blanket \"delete every *.a\" used to catch here."
     ],
     "docker-prune-dirs": [
       "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man",
       "lib/*.a"
     ]
   },
@@ -113,13 +123,17 @@
       "gnat-13-x86-64-linux-gnu"
     ],
     "_comment-prune-dirs": [
-      "Measured against a build of this image: every entry matched something and",
-      "nothing build-only was left behind. sc_prune_build_artifacts reports both",
-      "halves of that -- an entry that matches nothing, and any archive still in",
-      "the prefix -- so a list that goes stale says so in the build log."
+      "The archive globs are measured against a build of this image. They",
+      "are one level above the directories that hold the archives linked at",
+      "RUN time, so no exception list is needed: lib/ghdl/libgrt.a, linked into every design by \"ghdl -e\"",
+      "the blanket \"delete every *.a\" used to catch here."
     ],
     "docker-prune-dirs": [
       "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man",
       "lib/*.a"
     ]
   },
@@ -140,17 +154,6 @@
     "git-commit": "2026.07",
     "version-prefix": "",
     "auto-update": true,
-    "docker-prune-dirs": [
-      "include",
-      "lib/cmake",
-      "lib/pkgconfig",
-      "share/doc",
-      "share/man"
-    ],
-    "_comment-prune-dirs": [
-      "No archive glob: lib/Bluesim holds the simulation kernel that \"bsc -sim\"",
-      "links into the simulations it builds."
-    ],
     "_comment-drop-pkgs": [
       "The Haskell toolchain bsc is built with. Its libghc-*-dev packages and",
       "tcl-dev are build-only by the generic rules, so only ghc has to be named --",
@@ -162,6 +165,13 @@
     ],
     "docker-drop-pkgs": [
       "ghc"
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
     ]
   },
   "klayout": {
@@ -225,13 +235,11 @@
       "# help2man, autoconf -- the sweep classes build-only on its own.",
       "RUN rm $SC_PREFIX/bin/*_dbg $SC_PREFIX/share/verilator/bin/*_dbg"
     ],
-    "_comment-prune-dirs": [
-      "Measured against a build of this image: every entry matched something and",
-      "nothing build-only was left behind. sc_prune_build_artifacts reports both",
-      "halves of that -- an entry that matches nothing, and any archive still in",
-      "the prefix -- so a list that goes stale says so in the build log."
-    ],
     "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
       "share/man"
     ]
   },
@@ -253,13 +261,6 @@
       "RUN rm -r $SC_PREFIX/share/panda/asap7",
       "RUN rm -r $SC_PREFIX/share/panda/nangate45",
       "RUN rm -r $SC_PREFIX/share/panda/scripts"
-    ],
-    "docker-prune-dirs": [
-      "include",
-      "lib/cmake",
-      "lib/pkgconfig",
-      "share/doc",
-      "share/man"
     ],
     "_comment-drop-pkgs": [
       "The clang and boost build APIs are -dev packages the generic rules catch;",
@@ -294,32 +295,54 @@
       "openmpi-bin",
       "graphviz",
       "autoconf-archive"
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
     ]
   },
   "vpr": {
     "git-url": "https://github.com/verilog-to-routing/vtr-verilog-to-routing.git",
     "git-commit": "fe77ace273b3f0558763e0e91d409b2d13344eff",
     "auto-update": false,
+    "_comment-drop-pkgs": [
+      "vpr's build pulls the distribution clang stack, and nothing in the image",
+      "links it: 65MB of libclang-cpp.so and 35MB of libclang-18.so reach sc_tools",
+      "through this image's apt.txt if it is not named here."
+    ],
+    "docker-drop-pkgs": [
+      "clang",
+      "clang-18",
+      "clang-format-18",
+      "libclang-cpp18",
+      "libclang1-18",
+      "llvm-18-linker-tools",
+      "llvm-18-runtime",
+      "llvm-runtime"
+    ],
+    "_comment-prune-dirs": [
+      "The archive globs are measured against a build of this image. They",
+      "are one level above the directories that hold the archives linked at",
+      "The archive globs are measured against a build of this image: what",
+      "the blanket \"delete every *.a\" used to catch here."
+    ],
     "docker-prune-dirs": [
       "include",
       "lib/cmake",
       "lib/pkgconfig",
       "share/doc",
       "share/man",
-      "bin/*.a"
+      "bin/*.a",
+      "lib/*.a"
     ]
   },
   "icepack": {
     "git-url": "https://github.com/YosysHQ/icestorm.git",
     "git-commit": "v1.1",
     "auto-update": false,
-    "docker-prune-dirs": [
-      "include",
-      "lib/cmake",
-      "lib/pkgconfig",
-      "share/doc",
-      "share/man"
-    ],
     "docker-drop-pkgs": [
       "clang",
       "clang-18",
@@ -341,19 +364,19 @@
       "libucx0",
       "libopenmpi3*",
       "openmpi-bin"
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
     ]
   },
   "nextpnr": {
     "git-url": "https://github.com/YosysHQ/nextpnr.git",
     "git-commit": "nextpnr-0.9",
     "docker-depends": "icepack",
-    "docker-prune-dirs": [
-      "include",
-      "lib/cmake",
-      "lib/pkgconfig",
-      "share/doc",
-      "share/man"
-    ],
     "docker-drop-pkgs": [
       "clang",
       "clang-18",
@@ -375,6 +398,13 @@
       "libucx0",
       "libopenmpi3*",
       "openmpi-bin"
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
     ]
   },
   "chisel": {
@@ -393,12 +423,19 @@
     "git-url": "https://github.com/steveicarus/iverilog.git",
     "git-commit": "v13_0",
     "auto-update": true,
+    "_comment-prune-dirs": [
+      "The archive globs are measured against a build of this image. They",
+      "are one level above the directories that hold the archives linked at",
+      "The archive globs are measured against a build of this image: what",
+      "the blanket \"delete every *.a\" used to catch here."
+    ],
     "docker-prune-dirs": [
       "include",
       "lib/cmake",
       "lib/pkgconfig",
       "share/doc",
-      "share/man"
+      "share/man",
+      "lib/*.a"
     ]
   },
   "yosys": {
@@ -415,13 +452,6 @@
     "git-commit": "v0.68",
     "version-prefix": "",
     "auto-update": true,
-    "docker-prune-dirs": [
-      "include",
-      "lib/cmake",
-      "lib/pkgconfig",
-      "share/doc",
-      "share/man"
-    ],
     "docker-drop-pkgs": [
       "clang",
       "clang-18",
@@ -431,6 +461,13 @@
       "llvm-18-linker-tools",
       "llvm-18-runtime",
       "llvm-runtime"
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
     ]
   },
   "xyce": {
@@ -438,14 +475,6 @@
     "git-commit": "Release-7.10.0",
     "version-prefix": "Release-",
     "auto-update": true,
-    "docker-prune-dirs": [
-      "include",
-      "lib/cmake",
-      "lib/pkgconfig",
-      "share/doc",
-      "share/man",
-      "trilinos/lib/*.a"
-    ],
     "docker-drop-pkgs": [
       "libllvm17*",
       "llvm-17",
@@ -459,6 +488,20 @@
       "libucx0",
       "libopenmpi3*",
       "openmpi-bin"
+    ],
+    "_comment-prune-dirs": [
+      "The archive globs are measured against a build of this image. They",
+      "are one level above the directories that hold the archives linked at",
+      "The archive globs are measured against a build of this image: what",
+      "the blanket \"delete every *.a\" used to catch here."
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man",
+      "trilinos/lib/*.a"
     ]
   },
   "xdm": {
@@ -483,6 +526,12 @@
       "COPY slurm $SC_PREFIX/slurm_cfg",
       "RUN mv $SC_PREFIX/slurm_cfg/install-slurm.sh $SC_PREFIX/",
       "RUN chmod +x $SC_PREFIX/install-slurm.sh"
+    ],
+    "_comment-prune-dirs": [
+      "The archive globs are measured against a build of this image. They",
+      "are one level above the directories that hold the archives linked at",
+      "The archive globs are measured against a build of this image: what",
+      "the blanket \"delete every *.a\" used to catch here."
     ],
     "docker-prune-dirs": [
       "include",
@@ -539,12 +588,19 @@
       "boolector"
     ],
     "auto-update": true,
+    "_comment-prune-dirs": [
+      "The archive globs are measured against a build of this image. They",
+      "are one level above the directories that hold the archives linked at",
+      "The archive globs are measured against a build of this image: what",
+      "the blanket \"delete every *.a\" used to catch here."
+    ],
     "docker-prune-dirs": [
       "include",
       "lib/cmake",
       "lib/pkgconfig",
       "share/doc",
-      "share/man"
+      "share/man",
+      "lib/*.a"
     ]
   },
   "bitwuzla": {
@@ -601,13 +657,6 @@
     "git-url": "https://github.com/keplertech/kepler-formal.git",
     "git-commit": "fcb3d23b362768ba9d04d351b628fe0290421838",
     "auto-update": true,
-    "docker-prune-dirs": [
-      "include",
-      "lib/cmake",
-      "lib/pkgconfig",
-      "share/doc",
-      "share/man"
-    ],
     "docker-drop-pkgs": [
       "clang",
       "clang-18",
@@ -617,6 +666,20 @@
       "llvm-18-linker-tools",
       "llvm-18-runtime",
       "llvm-runtime"
+    ],
+    "_comment-prune-dirs": [
+      "The archive globs are measured against a build of this image. They",
+      "are one level above the directories that hold the archives linked at",
+      "The archive globs are measured against a build of this image: what",
+      "the blanket \"delete every *.a\" used to catch here."
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man",
+      "lib/*.a"
     ]
   },
   "vcd2fst": {
@@ -656,6 +719,12 @@
       "# is not declared.",
       "RUN rm $SC_PREFIX/lib/libclang-cpp.so* $SC_PREFIX/lib/libclang.so* \\",
       "    $SC_PREFIX/lib/libLTO.so* $SC_PREFIX/lib/libRemarks.so*"
+    ],
+    "_comment-prune-dirs": [
+      "The archive globs are measured against a build of this image. They",
+      "are one level above the directories that hold the archives linked at",
+      "The archive globs are measured against a build of this image: what",
+      "the blanket \"delete every *.a\" used to catch here."
     ],
     "docker-prune-dirs": [
       "include",
