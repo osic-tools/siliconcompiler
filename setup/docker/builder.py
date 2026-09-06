@@ -154,6 +154,40 @@ def make_base_tool_docker(output_dir):
     assemble_docker_file(name, tag, docker_file, {}, output_dir)
 
 
+# The per-image exceptions to the build-only sweep, declared by the tool that
+# knows them. A tool built FROM another tool's image prunes and sweeps that
+# tool's files as well as its own, so the base's exceptions have to travel with
+# it -- the whole chain is unioned here rather than repeated by hand in every
+# dependent's entry.
+_SWEEP_FIELDS = ('docker-keep-pkgs', 'docker-drop-pkgs', 'docker-prune-dirs')
+
+
+def _get_sweep_field(tool, field):
+    values = []
+    for name in [tool] + _get_docker_depends(tool):
+        entries = _tools.get_field(name, field)
+        if entries:
+            values.extend(entries)
+
+    # Deduplicated, order preserved: the same package can be named by a tool and
+    # by the tool it is built on.
+    return list(dict.fromkeys(values))
+
+
+def _get_docker_depends(tool):
+    depends = _tools.get_field(tool, 'docker-depends')
+    if not depends:
+        return []
+    if isinstance(depends, str):
+        depends = [depends]
+
+    chain = []
+    for depend in depends:
+        chain.append(depend)
+        chain.extend(_get_docker_depends(depend))
+    return chain
+
+
 def make_tool_docker(tool, output_dir, reference_tool=None):
     '''
     Generate the tool builder dockerfile
@@ -179,7 +213,10 @@ def make_tool_docker(tool, output_dir, reference_tool=None):
         # Another tool builds against this prefix, so leave its symbols alone.
         # The dependent copies this prefix in and strips it there, which is what
         # reaches sc_tools, so nothing ships unstripped either way.
-        'strip_symbols': not _is_build_input(tool)
+        'strip_symbols': not _is_build_input(tool),
+        'keep_pkgs': ' '.join(_get_sweep_field(tool, 'docker-keep-pkgs')),
+        'drop_pkgs': ' '.join(_get_sweep_field(tool, 'docker-drop-pkgs')),
+        'prune_dirs': ' '.join(_get_sweep_field(tool, 'docker-prune-dirs'))
     }
 
     if reference_tool:
@@ -394,6 +431,15 @@ def _get_tool_image_check_tag(tool):
     if cmds:
         for cmd in cmds:
             hash.update(cmd.encode('utf-8'))
+
+    # Only this tool's own entries: the dependency chain's are folded in by the
+    # depends_hash at the end, which already covers everything a base tool
+    # contributes to this image.
+    for field in _SWEEP_FIELDS:
+        entries = _tools.get_field(tool, field)
+        if entries:
+            for entry in entries:
+                hash.update(f'{field}:{entry}'.encode('utf-8'))
 
     # Whether this image gets stripped depends on the tool graph around it, not
     # only on this tool's own inputs, so a tool gaining or losing a dependent

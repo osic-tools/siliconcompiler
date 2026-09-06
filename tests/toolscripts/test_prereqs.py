@@ -108,14 +108,24 @@ DEB_STUBS = {
 # With no package argument this is the "list the whole database" form that
 # sc_remove_build_only walks. SC_TEST_DB holds "name|depends" lines.
 if [ -z "$3" ]; then
-    [ -f "$SC_TEST_DB" ] || exit 0
     case "$2" in
         # The combined form sc_remove_build_only walks: package, provides,
         # depends. The database file stores name|depends|provides, so the last
         # two columns come out swapped.
-        *Provides*Depends*) awk -F'|' -v OFS='\t' '{print $1, $3, $2}' "$SC_TEST_DB" ;;
-        *Depends*) awk -F'|' -v OFS='\t' '{print $1, $2}' "$SC_TEST_DB" ;;
-        *) awk -F'|' '{print $1}' "$SC_TEST_DB" ;;
+        *Provides*Depends*)
+            [ -f "$SC_TEST_DB" ] &&
+                awk -F'|' -v OFS='\t' '{print $1, $3, $2}' "$SC_TEST_DB" ;;
+        *Depends*)
+            [ -f "$SC_TEST_DB" ] &&
+                awk -F'|' -v OFS='\t' '{print $1, $2}' "$SC_TEST_DB" ;;
+        # Plain name listing. Anything this run installed belongs in it too:
+        # without that the stub cannot represent "was missing, now present" to
+        # a caller that diffs the whole installed set, which is how
+        # sc_strip_prefix_managed decides what to give back.
+        *)
+            [ -f "$SC_TEST_DB" ] && awk -F'|' '{print $1}' "$SC_TEST_DB"
+            [ -f "$SC_TEST_STATE" ] && cat "$SC_TEST_STATE"
+            ;;
     esac
     exit 0
 fi
@@ -166,7 +176,20 @@ esac
 
 
 def _manager_stub(name):
-    return f'#!/bin/sh\necho "{name} $*" >> "$SC_TEST_LOG"\n'
+    """yum/dnf stub. "group info" answers with a payload, because the helper
+    asks the package manager what a group contains instead of keeping a copy of
+    the list. SC_TEST_GROUP_PAYLOAD is what it answers with; unset means the
+    query comes back empty, which stands in for an unknown group."""
+    return f"""#!/bin/sh
+if [ "$1" = group ] && [ "$2" = info ]; then
+    shift 2
+    [ "$*" = "$SC_TEST_GROUP_NAME" ] || exit 1
+    echo " Mandatory Packages:"
+    for pkg in $SC_TEST_GROUP_PAYLOAD; do echo "   $pkg"; done
+    exit 0
+fi
+echo "{name} $*" >> "$SC_TEST_LOG"
+"""
 
 
 RPM_STUBS = {"rpm": RPM_QUERY_STUB, "yum": _manager_stub("yum")}
@@ -183,8 +206,10 @@ BACKEND_STUBS = {"deb": DEB_STUBS, "rpm": RPM_STUBS, "dnf": DNF_STUBS}
 # helper shells out to.
 # sc_strip_prefix walks the prefix and reads each file's ELF magic, so it needs a
 # few more real tools than install_prereqs does.
+# comm and cat are here for sc_strip_prefix_managed, which diffs the installed
+# package set around its binutils borrow instead of naming the family.
 REAL_TOOLS = ("grep", "find", "dd", "od", "tr", "basename", "rm",
-              "mktemp", "sed", "awk", "sort")
+              "mktemp", "sed", "awk", "sort", "comm", "cat")
 
 
 @pytest.fixture
@@ -192,7 +217,8 @@ def run_prereqs():
     """Run shell against _prereqs.sh with a stubbed package manager."""
     log = os.path.abspath("prereqs.log")
 
-    def run(body, backend="deb", root=False):
+    def run(body, backend="deb", root=False,
+            group_name="Development Tools", group_payload="gcc make"):
         bindir = os.path.abspath(f"stubbin-{backend}")
         os.makedirs(bindir, exist_ok=True)
 
@@ -222,8 +248,15 @@ def run_prereqs():
             ["/bin/sh", script], capture_output=True, text=True,
             env={"PATH": bindir, "SC_TEST_LOG": log, "SC_TEST_STATE": state,
                  "SC_TEST_DB": db,
+                 "SC_TEST_GROUP_NAME": group_name,
+                 "SC_TEST_GROUP_PAYLOAD": group_payload,
                  "SC_TEST_UID": "0" if root else "1000"})
         assert proc.returncode == 0, proc.stderr
+
+        # What the helper printed, for the handful of assertions about what it
+        # reports rather than what it ran. The stub package manager's log is
+        # the return value, so this rides along on the fixture.
+        run.stdout = proc.stdout
 
         if not os.path.exists(log):
             return []
@@ -339,20 +372,36 @@ def test_group_skips_when_payload_is_present(run_prereqs):
     a group as installed even after its packages are gone, so the group itself
     cannot be asked. With every mandatory member present the install is a no-op.
     """
-    log = run_prereqs(
-        '_SC_GROUP_DEVELOPMENT_TOOLS="present-gcc present-make"\n'
-        'install_prereq_group "Development Tools"',
-        backend="rpm")
+    log = run_prereqs('install_prereq_group "Development Tools"',
+                      backend="rpm", group_payload="present-gcc present-make")
 
     assert log == []
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="only works on linux")
 def test_unknown_group_is_installed_unconditionally(run_prereqs):
-    """No payload to probe means no confident skip, so it installs."""
+    """A group the package manager cannot describe has no payload to probe, so
+    there is no confident skip and it installs."""
     log = run_prereqs('install_prereq_group "Some Other Group"', backend="rpm")
 
     assert "yum group install -y Some Other Group" in log
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="only works on linux")
+def test_group_payload_comes_from_the_package_manager(run_prereqs):
+    """The payload is queried, not listed here: a group whose members the
+    package manager reports as present is skipped, and the same group is
+    installed when it reports one that is missing. Nothing in _prereqs.sh names
+    a member of any group."""
+    skipped = run_prereqs('install_prereq_group "Development Tools"',
+                          backend="rpm",
+                          group_payload="present-gcc present-binutils")
+    installed = run_prereqs('install_prereq_group "Development Tools"',
+                            backend="rpm",
+                            group_payload="present-gcc missing-strace")
+
+    assert skipped == []
+    assert "yum group install -y Development Tools" in installed
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="only works on linux")
@@ -703,19 +752,22 @@ def test_managed_strip_borrows_binutils_and_gives_it_back(run_prereqs, tmp_path)
 def test_managed_strip_gives_back_only_what_it_took(run_prereqs, tmp_path):
     """A family member that was already installed stays installed.
 
-    The stub reports "present-*" packages as installed, so naming one of the
-    binutils family that way stands in for an image that already had it.
+    The image already has libbinutils, so the before/after diff sees only
+    binutils arrive and only binutils is handed back. Which packages the family
+    has is never named -- that is the point: the diff catches whatever the
+    distribution's binutils happens to pull in.
     """
     prefix = _make_prefix(str(tmp_path / "m3"), {"bin/sta": True})
+    pre = _db(tmp_path, {"libbinutils": ""})
 
     log = run_prereqs(
-        'rm -f "$(command -v strip)"\n'
-        "_SC_STRIP_PKGS='present-libbinutils binutils'\n"
+        pre + 'rm -f "$(command -v strip)"\n'
         f"sc_strip_prefix_managed {prefix}")
 
-    removes = " ".join(line for line in log if "apt-get remove" in line)
-    assert "binutils" in removes, f"what it installed was not removed: {log}"
-    assert "present-libbinutils" not in removes, \
+    removed = set(" ".join(
+        line for line in log if "apt-get remove" in line).split())
+    assert "binutils" in removed, f"what it installed was not removed: {log}"
+    assert "libbinutils" not in removed, \
         "removed a family member the image already had"
 
 # ---------------------------------------------------------------------------
@@ -787,17 +839,68 @@ def test_build_only_still_removes_a_dev_needed_only_by_another_dev(run_prereqs, 
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="only works on linux")
-@pytest.mark.parametrize("pkg", ["zlib1g-dev", "ccache", "graphviz", "libc6-dev"])
-def test_build_only_never_touches_the_keep_list(run_prereqs, tmp_path, pkg):
-    """Each of these is invoked or linked after the build, which no dependency
-    graph records, so only an explicit exception protects them."""
+@pytest.mark.parametrize("pkg", ["zlib1g-dev", "libc6-dev"])
+def test_build_only_never_touches_a_kept_package(run_prereqs, tmp_path, pkg):
+    """--keep is what protects a package the rules would otherwise class as
+    build-only: it is invoked or linked after the build, which no dependency
+    graph records. The tool that needs it names it in its _tools.json entry."""
     pre = _db(tmp_path, {pkg: "", "libdrop-dev": ""})
 
-    log = run_prereqs(pre + "sc_remove_build_only")
+    log = run_prereqs(pre + f'sc_remove_build_only --keep "{pkg}"')
 
     removes = " ".join(line for line in log if "apt-get remove" in line)
     assert "libdrop-dev" in removes, "nothing was removed at all"
     assert pkg not in removes
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="only works on linux")
+def test_build_only_keep_takes_a_pattern(run_prereqs, tmp_path):
+    """A tool names a family without listing every member of it."""
+    pre = _db(tmp_path, {"libfoo1.83-dev": "", "libdrop-dev": ""})
+
+    log = run_prereqs(pre + 'sc_remove_build_only --keep "libfoo1.*"')
+
+    removes = " ".join(line for line in log if "apt-get remove" in line)
+    assert "libdrop-dev" in removes, "nothing was removed at all"
+    assert "libfoo1.83-dev" not in removes
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="only works on linux")
+def test_build_only_drops_what_a_tool_declares_build_only(run_prereqs, tmp_path):
+    """--drop is the other half: a package the generic rules do not recognise
+    that this image has no runtime use for. It goes even though a runtime
+    package depends on it, because that dependent is itself dropped."""
+    pre = _db(tmp_path, {"toolcruft": "", "libdrop-dev": ""})
+
+    log = run_prereqs(pre + 'sc_remove_build_only --drop "toolcruft"')
+
+    removes = " ".join(line for line in log if "apt-get remove" in line)
+    assert "toolcruft" in removes
+    assert "libdrop-dev" in removes
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="only works on linux")
+def test_build_only_keep_wins_over_drop(run_prereqs, tmp_path):
+    """A dependent's keep beats a base tool's drop when the lists are unioned
+    down a docker-depends chain, so the order the two are tested in matters."""
+    pre = _db(tmp_path, {"libboth": "", "libdrop-dev": ""})
+
+    log = run_prereqs(pre + 'sc_remove_build_only --keep "libboth" --drop "libboth"')
+
+    removes = " ".join(line for line in log if "apt-get remove" in line)
+    assert "libdrop-dev" in removes, "nothing was removed at all"
+    assert "libboth" not in removes
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="only works on linux")
+def test_build_only_rejects_an_unknown_argument(run_prereqs, tmp_path):
+    """A typo in a generated sweep line has to fail the build, not silently
+    sweep with no exceptions at all."""
+    pre = _db(tmp_path, {"libdrop-dev": ""})
+
+    log = run_prereqs(pre + 'sc_remove_build_only --keeps "libdrop-dev" || true')
+
+    assert not any("apt-get remove" in line for line in log), log
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="only works on linux")
@@ -822,7 +925,9 @@ def test_prune_removes_archives_headers_and_build_trees(run_prereqs, tmp_path):
         "bin/sta": True,
     })
 
-    run_prereqs(f"sc_prune_build_artifacts {prefix}")
+    run_prereqs(f'sc_prune_build_artifacts {prefix} '
+                f'--dirs "include lib/cmake lib/pkgconfig share/doc share/man '
+                f'lib/*.a"')
 
     for gone in ("lib/libOpenSTA.a", "include", "lib/cmake", "lib/pkgconfig",
                  "share/doc", "share/man"):
@@ -835,7 +940,9 @@ def test_prune_keeps_the_archives_that_are_runtime_dependencies(run_prereqs, tmp
     """The three that are linked after the build, not during it.
 
     Deleting any of them breaks the tool well after the image is built, which is
-    how the first version of this work broke bambu and ghdl.
+    how the first version of this work broke bambu and ghdl. No exception list
+    protects them any more: "lib/*.a" is one level up from lib/ghdl, so a tool
+    that declares it says exactly what it means.
     """
     prefix = _make_prefix(str(tmp_path / "pk"), {
         "lib/ghdl/libgrt.a": True,
@@ -844,12 +951,87 @@ def test_prune_keeps_the_archives_that_are_runtime_dependencies(run_prereqs, tmp
         "lib/libMLIRTestDialect.a": True,
     })
 
-    run_prereqs(f"sc_prune_build_artifacts {prefix}")
+    run_prereqs(f'sc_prune_build_artifacts {prefix} --dirs "lib/*.a"')
 
     for kept in ("lib/ghdl/libgrt.a", "lib/panda/libbambu_clang16.a",
                  "lib/Bluesim/libbskernel.a"):
         assert os.path.exists(os.path.join(prefix, kept)), f"{kept} was deleted"
     assert not os.path.exists(os.path.join(prefix, "lib/libMLIRTestDialect.a"))
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="only works on linux")
+def test_prune_keeps_every_archive_a_tool_does_not_declare(run_prereqs, tmp_path):
+    """No blanket archive rule. A prefix whose tool lists only dev material
+    keeps its archives, which costs image size -- the direction that does not
+    break a tool at run time -- and the report below is how it gets noticed."""
+    prefix = _make_prefix(str(tmp_path / "pn"), {
+        "lib/ghdl/libgrt.a": True,
+        "bin/sta": True,
+    })
+
+    run_prereqs(f'sc_prune_build_artifacts {prefix} --dirs "include"')
+
+    assert os.path.exists(os.path.join(prefix, "lib/ghdl/libgrt.a"))
+    assert os.path.exists(os.path.join(prefix, "bin/sta"))
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="only works on linux")
+def test_prune_reports_an_entry_that_matched_nothing(run_prereqs, tmp_path):
+    """A path upstream stopped shipping shows up in the build log rather than
+    sitting in the list doing nothing."""
+    prefix = _make_prefix(str(tmp_path / "pm"), {"bin/sta": True})
+
+    run_prereqs(f'sc_prune_build_artifacts {prefix} --dirs "lib/cmake"')
+
+    assert "drop it from docker-prune-dirs: lib/cmake" in run_prereqs.stdout
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="only works on linux")
+def test_prune_reports_archives_it_left_behind(run_prereqs, tmp_path):
+    """The inventory a tool needs to write a correct list: every archive still
+    in the prefix, named, so an undeclared one is a grep away rather than a
+    silently larger image."""
+    prefix = _make_prefix(str(tmp_path / "pl"), {
+        "lib/ghdl/libgrt.a": True,
+        "lib/libOpenSTA.a": True,
+    })
+
+    run_prereqs(f'sc_prune_build_artifacts {prefix} --dirs "lib/*.a"')
+
+    out = run_prereqs.stdout
+    assert "static archives left in the prefix" in out
+    assert "lib/ghdl/libgrt.a" in out
+    assert "lib/libOpenSTA.a" not in out, "reported an archive it deleted"
+    assert not os.path.exists(os.path.join(prefix, "lib/libOpenSTA.a"))
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="only works on linux")
+def test_prune_deletes_only_the_directories_the_tool_names(run_prereqs, tmp_path):
+    """No list, no deletion. The directories are the tool's declaration
+    ("docker-prune-dirs"), not a convention this file knows, so a prefix whose
+    tool names none of them keeps its include/ and share/doc."""
+    prefix = _make_prefix(str(tmp_path / "pd"), {
+        "include/sta/Sta.hh": False,
+        "share/doc/sta/index.html": False,
+        "share/man/man1/sta.1": False,
+    })
+
+    run_prereqs(f'sc_prune_build_artifacts {prefix} --dirs "share/man"')
+
+    assert not os.path.exists(os.path.join(prefix, "share/man"))
+    assert os.path.exists(os.path.join(prefix, "include/sta/Sta.hh"))
+    assert os.path.exists(os.path.join(prefix, "share/doc/sta/index.html"))
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="only works on linux")
+def test_prune_rejects_an_unknown_argument(run_prereqs, tmp_path):
+    """A typo in a generated prune line has to fail the build rather than
+    delete the prefix's dev material by falling back to some default."""
+    prefix = _make_prefix(str(tmp_path / "pr2"), {"include/foo.h": False})
+
+    run_prereqs(f'sc_prune_build_artifacts {prefix} --dir "include" || true')
+
+    assert os.path.exists(os.path.join(prefix, "include/foo.h"))
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="only works on linux")
@@ -885,8 +1067,8 @@ def test_build_only_follows_provides(run_prereqs, tmp_path):
 def test_build_only_protects_a_kept_package_transitively(run_prereqs, tmp_path):
     """A one-level check is not enough.
 
-    zlib1g-dev is on the keep-list and depends on a build-only package,
-    which in turn depends on another. Holding back only the first is no use:
+    zlib1g-dev is kept by verilator and depends on a build-only package, which
+    in turn depends on another. Holding back only the first is no use:
     "apt-get remove" on the second takes the first, and zlib1g-dev with it.
     """
     pre = _db(tmp_path, {
@@ -896,7 +1078,7 @@ def test_build_only_protects_a_kept_package_transitively(run_prereqs, tmp_path):
         "libfree-dev": "",
     })
 
-    log = run_prereqs(pre + "sc_remove_build_only")
+    log = run_prereqs(pre + 'sc_remove_build_only --keep "zlib1g-dev"')
 
     removes = " ".join(line for line in log if "apt-get remove" in line)
     assert "libfree-dev" in removes, "nothing was removed at all"
